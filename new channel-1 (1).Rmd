@@ -1,0 +1,181 @@
+---
+title: "new channel"
+author: "Lindelwa"
+date: "2024-08-15"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, warning=FALSE}
+library(dplyr)
+library(quantmod)
+library(PerformanceAnalytics)
+library(ggplot2)
+library(zoo)
+```
+
+```{r, warning=FALSE}
+#outofsample
+set.seed(20)
+
+ns = c(5,10,15,20,25,50,100,150,200,250)
+xs = c(0.005,0.01,0.02,0.03,0.05,0.075,0.10,0.15)
+bs = c(0.001,0.005,0.01,0.015,0.02,0.03,0.04,0.05)
+cs = c(5,10,25,50)
+
+# Initialize a data frame to store results
+max_values <- rep(NA, nrow(dat))
+min_values <- rep(NA, nrow(dat))
+#daily_returns_matrix <- matrix(NA, nrow = length(ns) * length(xs) * length(cs), ncol = nrow(dat)-1)
+#row_counter <- 1
+daily_returns_list <- list()
+results <- data.frame(n = numeric(), c = numeric(), x = numeric(), mean_return = numeric())
+
+# Loop over all combinations of n, c, and x
+for (n in ns) {
+  for (x in xs) {
+    #for(b in bs) {
+      #if(b < x){
+        for(c in cs){
+          
+          signal <- rep(0, nrow(dat))   #changed from NA because it was chaii
+          position <- rep(0, nrow(dat))
+          
+          for (i in (n+1):nrow(dat)) {
+            #high_n <- rollapply(dat$High, n, max, align = "right", fill = NA)[i-1]
+            #low_n <- rollapply(dat$Low, n, min, align = "right", fill = NA)[i-1]
+            high_n <- max(dat$High[(i-n):(i-1)])  
+            low_n <- min(dat$Low[(i-n):(i-1)])
+            
+            max_values[i] = high_n
+            min_values[i] = low_n
+            
+            #channel_condition <-  (high_n - low_n) > (x*high_n)
+            upper_threshold <- (1 + x) * low_n 
+            lower_threshold <- (1 - x) * high_n 
+            
+            # Generate buy signal if the closing price exceeds the channel high
+            if (Cl(dat)[i] > upper_threshold) {
+              signal[i] <- 1
+              #if (position[i-1] != 1) {  # Check if previous position is not already 1
+              #  position[i] <- 1               # Buy signal
+              #}
+            } else if (Cl(dat)[i] < lower_threshold) {
+              signal[i] <- -1  # Sell signal
+              #if (position[i-1] != -1) {  # Check if previous position is not already -1
+              #  position[i] <- -1
+              #}
+            } else {
+              signal[i] <- 0  # Hold signal
+            }
+            
+          }
+          for (i in 1:nrow(dat)) {
+            if (signal[i] == 1) {
+              if (i + c - 1 <= nrow(dat)) {
+                position[i:(i + c - 1)] <- 1
+              } else {
+                position[i:nrow(dat)] <- 1  # Ensure you don't go beyond the dataset length
+              }
+            } else if (signal[i] == -1) {
+              if (i + c - 1 <= nrow(dat)) {
+                position[i:(i + c - 1)] <- -1
+              } else {
+                position[i:nrow(dat)] <- -1
+              }
+            }
+          }
+          #for (i in 1:nrow(dat)) {
+            #if (signal[i] == 1) {
+              #position[i:(i + c - 1)] <- 1
+            #} else if (signal[i] == -1) {
+              #position[i:(i + c - 1)] <- -1
+            #}
+          #}
+          
+          # Calculate daily returns
+          daily_returns <-  na.omit(Lag(position) * ROC(Cl(dat), n=1))
+          #daily_returns <- diff(Cl(dat)) * c(0, signal[-length(signal)])
+          
+          
+          # Calculate mean return
+          mean_ret <- mean(daily_returns, na.rm = TRUE)
+          #daily_returns_matrix[row_counter, ] <- daily_returns
+          #row_counter <- row_counter + 1
+          daily_returns_list <- c(daily_returns_list, list(daily_returns))
+          # Store results
+          results <- rbind(results, data.frame(n = n, x = x,
+                                               c = c,
+                                               #b = b,
+                                               mean_return = mean_ret))
+          
+        }
+      }
+    #}
+  #}
+}
+dat$High_n = max_values
+signal = as.matrix(signal)
+positon = as.matrix(position)
+#daily_returns = as.matrix(daily_returns)
+
+results <- results %>%
+  mutate(x = as.factor(x),
+         c = as.factor(c))
+
+# Plot the trajectory of returns
+ggplot(results, aes(x = c, y = mean_return, group =interaction(x,b), color = factor(b))) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ n, scales = "free_y")+
+  labs(title = "Trajectory of Returns for Each Combination of n, x, and c",
+       x = "c",
+       y = "Mean Return",
+       color = "b") +
+  theme_minimal()
+
+ggplot(results, aes(x = c, y = mean_return, group = x, color = x)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ n, scales = "free_y")+
+  labs(title = "Trajectory of Returns for Each Combination of n, x, and c",
+       x = "c",
+       y = "Mean Return",
+       color = "b") +
+  theme_minimal()
+
+
+#sharpeRatio
+daily_returns_matrix <- do.call(rbind, daily_returns_list)
+#daily_returns <- data.frame(Returns = daily_returns)
+#daily_returns$Date <- as.Date(dat$Date[1:nrow(daily_returns)])
+#daily_returns_xts <- xts(daily_returns$Returns, order.by = daily_returns$Date)
+#s1 = SharpeRatio.annualized(daily_returns_xts, Rf = 0.013/252, scale = 252)
+#################################################################################################
+risk_free_rate <- log(1+0.025)/252  # daily risk-free rate
+annualized_sharpe_ratios <- rep(NA, length(daily_returns_list))
+for (i in 1:length(daily_returns_list)) {
+  daily_returns <- daily_returns_list[[i]]
+  rf_vec = rep(risk_free_rate, length(daily_returns))
+  daily_sharpe <- mean(daily_returns - rf_vec, na.rm = TRUE) / sd(daily_returns, na.rm = TRUE)
+  annualized_sharpe <- daily_sharpe * 252
+  annualized_sharpe_ratios[i] <- annualized_sharpe
+}
+which.max(annualized_sharpe_ratios)
+annualized_sharpe_ratios[which.max(annualized_sharpe_ratios)]
+annualized_sharpe_ratios = as.matrix(annualized_sharpe_ratios)
+
+max_length <- max(sapply(daily_returns_list, length))
+
+# Create a matrix with the correct dimensions
+daily_returns_mat <- matrix(0,nrow = max_length, ncol = length(daily_returns_list))
+
+# Fill the matrix with the values from the list
+for (i in 1:length(daily_returns_list)) {
+  daily_returns_mat[1:length(daily_returns_list[[i]]), i] <- daily_returns_list[[i]]
+}
+```
